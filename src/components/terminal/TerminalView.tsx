@@ -37,6 +37,8 @@ interface TerminalViewProps {
   terminalCount?: number;
   isZoomed?: boolean;
   onToggleZoom?: () => void;
+  /** Callback to fork from this session (only for Claude mode). */
+  onFork?: (sessionId: number) => void;
 }
 
 /** Map backend AiMode to frontend AIProvider */
@@ -114,6 +116,7 @@ export const TerminalView = memo(function TerminalView({
   terminalCount = 1,
   isZoomed = false,
   onToggleZoom,
+  onFork,
 }: TerminalViewProps) {
   const sessionData = useSessionStore(
     useShallow((s) => {
@@ -489,6 +492,8 @@ export const TerminalView = memo(function TerminalView({
         terminalCount={terminalCount}
         isZoomed={isZoomed}
         onToggleZoom={onToggleZoom}
+        onFork={onFork}
+        showFork={effectiveProvider === "claude"}
       />
 
       {/* xterm.js container */}
