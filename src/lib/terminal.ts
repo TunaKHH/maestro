@@ -210,6 +210,10 @@ export function waitForTerminalReady(sessionId: number, timeoutMs = 5000): Promi
 export type CliFlags = {
   skipPermissions: boolean;
   customFlags: string;
+  /** Claude Code session UUID to resume from. */
+  resumeSessionId?: string;
+  /** Whether to fork (create new branch) instead of continuing the resumed session. */
+  forkSession?: boolean;
 };
 
 /**
@@ -238,6 +242,12 @@ export function buildCliCommand(mode: AiMode, flags?: CliFlags): string | null {
   if (flags) {
     if (flags.skipPermissions && config.skipPermissionsFlag) {
       parts.push(config.skipPermissionsFlag);
+    }
+    if (flags.resumeSessionId) {
+      parts.push("--resume", flags.resumeSessionId);
+      if (flags.forkSession) {
+        parts.push("--fork-session");
+      }
     }
     if (flags.customFlags.trim()) {
       parts.push(flags.customFlags.trim());

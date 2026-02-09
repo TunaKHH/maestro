@@ -8,6 +8,7 @@ import {
   FolderGit2,
   FolderOpen,
   GitBranch,
+  GitFork,
   Loader2,
   Minimize,
   Package,
@@ -24,10 +25,12 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import type { BranchWithWorktreeStatus } from "@/lib/git";
+import type { ClaudeSession } from "@/lib/claudeSessions";
 import type { McpServerConfig } from "@/lib/mcp";
 import type { PluginConfig, SkillConfig } from "@/lib/plugins";
 import type { AiMode } from "@/stores/useSessionStore";
 import type { RepositoryInfo, WorkspaceType } from "@/stores/useWorkspaceStore";
+import { ForkSessionPicker } from "./ForkSessionPicker";
 
 /** Pre-launch session slot configuration. */
 export interface SessionSlot {
@@ -45,6 +48,10 @@ export interface SessionSlot {
   enabledSkills: string[];
   /** IDs of enabled plugins for this session. */
   enabledPlugins: string[];
+  /** Claude Code session UUID to fork from (only for Claude mode). */
+  forkSourceSessionId?: string;
+  /** Display text of the fork source session (for UI). */
+  forkSourceDisplay?: string;
 }
 
 interface PreLaunchCardProps {
@@ -79,6 +86,10 @@ interface PreLaunchCardProps {
   onRemove: () => void;
   isZoomed?: boolean;
   onToggleZoom?: () => void;
+  /** Callback when a fork source session is selected. */
+  onForkSelect?: (sessionId: string, display: string) => void;
+  /** Callback to clear the fork source selection. */
+  onForkClear?: () => void;
 }
 
 const AI_MODES: { mode: AiMode; icon: typeof BrainCircuit; label: string; color: string }[] = [
@@ -94,6 +105,7 @@ function getModeConfig(mode: AiMode) {
 
 export function PreLaunchCard({
   slot,
+  projectPath,
   branches,
   isLoadingBranches,
   isGitRepo,
@@ -118,11 +130,14 @@ export function PreLaunchCard({
   onRemove,
   isZoomed = false,
   onToggleZoom,
+  onForkSelect,
+  onForkClear,
 }: PreLaunchCardProps) {
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
   const [mcpDropdownOpen, setMcpDropdownOpen] = useState(false);
   const [pluginsSkillsDropdownOpen, setPluginsSkillsDropdownOpen] = useState(false);
+  const [forkPickerOpen, setForkPickerOpen] = useState(false);
   const [expandedPlugins, setExpandedPlugins] = useState<Set<string>>(new Set());
   const [mcpSearchQuery, setMcpSearchQuery] = useState("");
   const [pluginsSearchQuery, setPluginsSearchQuery] = useState("");
@@ -1024,15 +1039,69 @@ export function PreLaunchCard({
           )}
         </div>
 
+        {/* Fork Source Info (when selected) */}
+        {slot.forkSourceSessionId && slot.forkSourceDisplay && (
+          <div className="flex items-center gap-2 rounded border border-maestro-accent/30 bg-maestro-accent/5 px-3 py-2 text-xs">
+            <GitFork size={14} className="shrink-0 text-maestro-accent" />
+            <span className="min-w-0 flex-1 truncate text-maestro-text">
+              Forking from: &quot;{slot.forkSourceDisplay}&quot;
+            </span>
+            {onForkClear && (
+              <button
+                type="button"
+                onClick={onForkClear}
+                className="shrink-0 rounded p-0.5 text-maestro-muted transition-colors hover:bg-maestro-card hover:text-maestro-red"
+                title="Clear fork source"
+                aria-label="Clear fork source"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Launch Button */}
         <button
           type="button"
           onClick={onLaunch}
           className="flex items-center justify-center gap-2 rounded bg-maestro-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-maestro-accent/80"
         >
-          <Play size={16} fill="currentColor" />
-          Launch Session
+          {slot.forkSourceSessionId ? (
+            <>
+              <GitFork size={16} />
+              Fork &amp; Launch
+            </>
+          ) : (
+            <>
+              <Play size={16} fill="currentColor" />
+              Launch Session
+            </>
+          )}
         </button>
+
+        {/* Fork from Session Button (only for Claude mode, when no fork source selected) */}
+        {slot.mode === "Claude" && !slot.forkSourceSessionId && onForkSelect && (
+          <button
+            type="button"
+            onClick={() => setForkPickerOpen(true)}
+            className="flex items-center justify-center gap-2 rounded border border-maestro-border px-4 py-2 text-xs text-maestro-muted transition-colors hover:border-maestro-accent/50 hover:text-maestro-text"
+          >
+            <GitFork size={14} />
+            Fork from Session
+          </button>
+        )}
+
+        {/* Fork Session Picker Dialog */}
+        {forkPickerOpen && onForkSelect && (
+          <ForkSessionPicker
+            projectPath={projectPath}
+            onSelect={(session: ClaudeSession) => {
+              onForkSelect(session.sessionId, session.display);
+              setForkPickerOpen(false);
+            }}
+            onClose={() => setForkPickerOpen(false)}
+          />
+        )}
       </div>
     </div>
   );

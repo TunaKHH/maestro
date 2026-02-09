@@ -187,6 +187,8 @@ pub fn run() {
             commands::fonts::check_font_available,
             // Usage tracking commands
             commands::usage::get_claude_usage,
+            // Claude session history commands
+            commands::claude_sessions::get_claude_sessions,
             // GitHub commands
             commands::github::github_auth_status,
             commands::github::github_list_prs,

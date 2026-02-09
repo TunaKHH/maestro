@@ -7,6 +7,7 @@ import {
   Expand,
   GitBranch,
   GitCompareArrows,
+  GitFork,
   Minimize,
   Sparkles,
   Terminal,
@@ -32,6 +33,10 @@ interface TerminalHeaderProps {
   terminalCount?: number;
   isZoomed?: boolean;
   onToggleZoom?: () => void;
+  /** Callback to fork from this session. Only shown for Claude mode. */
+  onFork?: (sessionId: number) => void;
+  /** Whether to show the fork button (only for Claude mode). */
+  showFork?: boolean;
 }
 
 const STATUS_COLOR: Record<SessionStatus, string> = {
@@ -76,6 +81,8 @@ export const TerminalHeader = memo(function TerminalHeader({
   terminalCount = 1,
   isZoomed = false,
   onToggleZoom,
+  onFork,
+  showFork = false,
 }: TerminalHeaderProps) {
   const { icon: ProviderIcon, label: providerLabel } = providerConfig[provider];
 
@@ -258,6 +265,19 @@ export const TerminalHeader = memo(function TerminalHeader({
             className="rounded bg-maestro-green px-1.5 py-0.5 font-medium text-white transition-colors hover:bg-maestro-green/80 text-[9px]"
           >
             Launch
+          </button>
+        )}
+
+        {/* Fork button (Claude mode only) */}
+        {showFork && onFork && (
+          <button
+            type="button"
+            onClick={() => onFork(sessionId)}
+            className="rounded p-0.5 text-maestro-muted transition-colors hover:bg-maestro-card hover:text-maestro-purple"
+            title="Fork this session"
+            aria-label="Fork this session"
+          >
+            <GitFork size={terminalCount <= 4 ? 14 : 12} />
           </button>
         )}
 
