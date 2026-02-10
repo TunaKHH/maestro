@@ -9,7 +9,6 @@ pub enum PtyErrorCode {
     SessionNotFound,
     WriteFailed,
     ResizeFailed,
-    KillFailed,
     IdOverflow,
 }
 
@@ -61,14 +60,6 @@ impl PtyError {
     pub fn resize_failed(msg: impl Into<String>) -> Self {
         Self {
             code: PtyErrorCode::ResizeFailed,
-            message: msg.into(),
-        }
-    }
-
-    /// Session termination (SIGTERM/SIGKILL) failed.
-    pub fn kill_failed(msg: impl Into<String>) -> Self {
-        Self {
-            code: PtyErrorCode::KillFailed,
             message: msg.into(),
         }
     }

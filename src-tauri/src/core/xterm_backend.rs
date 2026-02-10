@@ -3,6 +3,7 @@
 //! This backend sends raw PTY output directly to xterm.js for rendering.
 //! It wraps the existing ProcessManager PTY logic and implements the
 //! TerminalBackend trait for cross-platform compatibility.
+#![allow(dead_code)]
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -244,6 +244,7 @@ struct PluginManifest {
 #[derive(Debug, Deserialize)]
 struct InstalledPluginsJson {
     #[serde(default)]
+    #[allow(dead_code)]
     version: u32,
     #[serde(default)]
     plugins: HashMap<String, Vec<InstalledPluginEntry>>,

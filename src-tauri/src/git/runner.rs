@@ -12,6 +12,7 @@ use crate::core::windows_process::TokioCommandExt;
 #[derive(Debug)]
 pub struct GitOutput {
     pub stdout: String,
+    #[allow(dead_code)]
     pub stderr: String,
 }
 

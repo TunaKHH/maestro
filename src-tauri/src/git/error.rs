@@ -20,10 +20,6 @@ pub enum GitError {
         command: String,
     },
 
-    /// A git command was terminated by a signal before completing.
-    #[error("git command was killed by signal")]
-    Killed { command: String },
-
     /// The git process could not be spawned (e.g., permission denied).
     #[error("failed to spawn git process: {source}")]
     SpawnError {
@@ -35,10 +31,6 @@ pub enum GitError {
     #[error("invalid UTF-8 in git output")]
     InvalidUtf8(#[from] std::string::FromUtf8Error),
 
-    /// Structured output from git could not be parsed as expected.
-    #[error("failed to parse git output: {message}")]
-    ParseError { message: String },
-
     /// The specified path is not a git repository.
     #[error("repository not found at {path}")]
     NotARepo { path: PathBuf },
@@ -47,9 +39,6 @@ pub enum GitError {
     #[error("branch '{branch}' already checked out at {path}")]
     BranchAlreadyCheckedOut { branch: String, path: String },
 
-    /// The specified worktree path does not exist in git's worktree list.
-    #[error("worktree not found: {0}")]
-    WorktreeNotFound(String),
 }
 
 /// Serializes the error as its `Display` string so the frontend receives a

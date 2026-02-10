@@ -207,6 +207,7 @@ pub struct SessionMarketplaceConfig {
 
 /// Raw structure of a marketplace.json catalog file.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct MarketplaceCatalog {
     /// Name of the marketplace.
     pub name: String,
@@ -231,6 +232,7 @@ pub enum CatalogAuthor {
     Detailed {
         name: String,
         #[serde(default)]
+        #[allow(dead_code)]
         email: Option<String>,
     },
 }

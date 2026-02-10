@@ -3,6 +3,7 @@
 //! Provides a common interface for different terminal backends (xterm.js passthrough,
 //! Ghostty VT, etc.) enabling platform-specific optimizations while maintaining
 //! cross-platform compatibility.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 use tauri::AppHandle;
