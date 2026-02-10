@@ -88,11 +88,6 @@ impl SessionManager {
         }
     }
 
-    /// Returns a snapshot of the session config, or `None` if not found.
-    pub fn get_session(&self, id: u32) -> Option<SessionConfig> {
-        self.sessions.get(&id).map(|s| s.clone())
-    }
-
     /// Updates the session's status in place. Returns `false` if the session
     /// does not exist (no error is raised).
     pub fn update_status(&self, id: u32, status: SessionStatus) -> bool {

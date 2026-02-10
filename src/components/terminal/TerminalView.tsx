@@ -1,6 +1,7 @@
 import { CanvasAddon } from "@xterm/addon-canvas";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
@@ -37,6 +38,8 @@ interface TerminalViewProps {
   terminalCount?: number;
   isZoomed?: boolean;
   onToggleZoom?: () => void;
+  /** Callback to fork from this session (only for Claude mode). */
+  onFork?: (sessionId: number) => void;
 }
 
 /** Map backend AiMode to frontend AIProvider */
@@ -114,6 +117,7 @@ export const TerminalView = memo(function TerminalView({
   terminalCount = 1,
   isZoomed = false,
   onToggleZoom,
+  onFork,
 }: TerminalViewProps) {
   const sessionData = useSessionStore(
     useShallow((s) => {
@@ -320,8 +324,11 @@ export const TerminalView = memo(function TerminalView({
       fitAddon = new FitAddon();
       const webLinksAddon = new WebLinksAddon();
 
+      const unicode11Addon = new Unicode11Addon();
       term.loadAddon(fitAddon);
       term.loadAddon(webLinksAddon);
+      term.loadAddon(unicode11Addon);
+      term.unicode.activeVersion = "11";
       term.open(container);
 
       // GPU-accelerated rendering (must be loaded after open())
@@ -353,7 +360,30 @@ export const TerminalView = memo(function TerminalView({
         }
       });
 
+      // Workaround for xterm.js CompositionHelper bug on WebKit (Tauri/WKWebView):
+      // The hidden textarea accumulates text across compositions, but CompositionHelper
+      // uses textarea.value.length at compositionstart as the extraction offset. When
+      // prior text remains in the textarea, it extracts the wrong substring — e.g.
+      // sending "測試" instead of "這是". We capture the correct text from the
+      // compositionend event and replace whatever xterm sends via onData.
+      const textarea = term.textarea!;
+      let pendingCompositionData: string | null = null;
+
+      textarea.addEventListener("compositionend", (e) => {
+        pendingCompositionData = (e as CompositionEvent).data;
+      });
+
       dataDisposable = term.onData((data) => {
+        if (pendingCompositionData !== null) {
+          const correctData = pendingCompositionData;
+          pendingCompositionData = null;
+          // Clear textarea to prevent accumulation that corrupts future compositions
+          textarea.value = "";
+          if (correctData.length > 0) {
+            writeStdin(sessionId, correctData).catch(console.error);
+          }
+          return;
+        }
         writeStdin(sessionId, data).catch(console.error);
       });
 
@@ -376,6 +406,12 @@ export const TerminalView = memo(function TerminalView({
           const selection = term.getSelection();
           navigator.clipboard.writeText(selection).catch(console.error);
           return false; // Don't send to PTY
+        }
+
+        // Cmd/Ctrl+T: add new session — block xterm so 't' isn't sent to PTY.
+        // The DOM event still bubbles to window where useAppKeyboard handles it.
+        if (event.key === "t" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.type === "keydown") {
+          return false;
         }
 
         // Cmd+Left/Right (Mac): jump to beginning/end of line
@@ -473,7 +509,7 @@ export const TerminalView = memo(function TerminalView({
 
   return (
     <div
-      className={`terminal-cell flex h-full flex-col bg-maestro-bg ${cellStatusClass(effectiveStatus)} ${isFocused ? "ring-2 ring-maestro-accent ring-inset" : ""}`}
+      className={`terminal-cell flex h-full flex-col bg-maestro-bg ${cellStatusClass(effectiveStatus)} ${isFocused ? "terminal-cell-focused" : ""}`}
       onClick={onFocus}
     >
       {/* Rich header bar */}
@@ -489,6 +525,8 @@ export const TerminalView = memo(function TerminalView({
         terminalCount={terminalCount}
         isZoomed={isZoomed}
         onToggleZoom={onToggleZoom}
+        onFork={onFork}
+        showFork={effectiveProvider === "claude"}
       />
 
       {/* xterm.js container */}

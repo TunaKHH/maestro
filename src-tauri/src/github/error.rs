@@ -18,10 +18,6 @@ pub enum GitHubError {
         command: String,
     },
 
-    /// A gh command was terminated by a signal before completing.
-    #[error("gh command was killed by signal")]
-    Killed { command: String },
-
     /// The gh process could not be spawned (e.g., permission denied).
     #[error("failed to spawn gh process: {source}")]
     SpawnError {

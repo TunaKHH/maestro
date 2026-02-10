@@ -24,7 +24,9 @@ import {
   spawnShell,
   waitForTerminalReady,
   writeStdin,
+  type CliFlags,
 } from "@/lib/terminal";
+import type { ClaudeSession } from "@/lib/claudeSessions";
 import { useCliSettingsStore } from "@/stores/useCliSettingsStore";
 import { cleanupSessionWorktree, prepareSessionWorktree } from "@/lib/worktreeManager";
 import { useTerminalKeyboard } from "@/hooks/useTerminalKeyboard";
@@ -33,6 +35,7 @@ import { usePluginStore } from "@/stores/usePluginStore";
 import { useSessionStore } from "@/stores/useSessionStore";
 import type { AiMode } from "@/stores/useSessionStore";
 import { useWorkspaceStore, type RepositoryInfo, type WorkspaceType } from "@/stores/useWorkspaceStore";
+import { ForkSessionPicker } from "./ForkSessionPicker";
 import { PreLaunchCard, type SessionSlot } from "./PreLaunchCard";
 import { TerminalView } from "./TerminalView";
 
@@ -198,6 +201,9 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
 
   // Track which terminal slot is zoomed (takes full screen)
   const [zoomedSlotId, setZoomedSlotId] = useState<string | null>(null);
+
+  // Fork session picker state: tracks which running session triggered the fork picker
+  const [forkPickerSourceSessionId, setForkPickerSourceSessionId] = useState<number | null>(null);
 
   // Git branch data
   const [branches, setBranches] = useState<BranchWithWorktreeStatus[]>([]);
@@ -592,7 +598,13 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
 
             // Build CLI command with user-configured flags
             const cliFlags = useCliSettingsStore.getState().getFlags(slot.mode);
-            const cliCommand = buildCliCommand(slot.mode, cliFlags);
+
+            // Inject fork session flags if this slot is forking from an existing session
+            const finalFlags: CliFlags = slot.forkSourceSessionId
+              ? { ...cliFlags, resumeSessionId: slot.forkSourceSessionId, forkSession: true }
+              : cliFlags;
+
+            const cliCommand = buildCliCommand(slot.mode, finalFlags);
 
             // Send CLI launch command
             await writeStdin(sessionId, `${cliCommand}\r`);
@@ -901,6 +913,45 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     setZoomedSlotId(prev => prev === slotId ? null : slotId);
   }, []);
 
+  /**
+   * Opens the fork session picker triggered from a running session's header button.
+   */
+  const handleForkFromSession = useCallback((sessionId: number) => {
+    setForkPickerSourceSessionId(sessionId);
+  }, []);
+
+  /**
+   * Handles a session being selected from the fork picker (triggered from running session header).
+   * Creates a new pre-launch slot pre-configured with the fork source.
+   */
+  const handleForkSessionSelected = useCallback((claudeSession: ClaudeSession) => {
+    if (slotsRef.current.length >= MAX_SESSIONS) return;
+
+    // Find the source running session to copy its configuration
+    const sourceSlot = slotsRef.current.find((s) => s.sessionId === forkPickerSourceSessionId);
+
+    const newSlot: SessionSlot = {
+      id: generateSlotId(),
+      mode: sourceSlot?.mode ?? "Claude",
+      branch: sourceSlot?.branch ?? null,
+      sessionId: null,
+      worktreePath: null,
+      worktreeWarning: null,
+      enabledMcpServers: sourceSlot?.enabledMcpServers ?? mcpServers.map((s) => s.name),
+      enabledSkills: sourceSlot?.enabledSkills ?? skills.map((s) => s.id),
+      enabledPlugins: sourceSlot?.enabledPlugins ?? plugins.filter((p) => p.enabled_by_default).map((p) => p.id),
+      forkSourceSessionId: claudeSession.sessionId,
+      forkSourceDisplay: claudeSession.display,
+    };
+
+    setSlots((prev) => {
+      if (prev.length >= MAX_SESSIONS) return prev;
+      return [...prev, newSlot];
+    });
+
+    setForkPickerSourceSessionId(null);
+  }, [forkPickerSourceSessionId, mcpServers, skills, plugins]);
+
   // Handle Escape key to exit zoom mode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1008,6 +1059,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
                 terminalCount={slots.length}
                 isZoomed={true}
                 onToggleZoom={() => handleToggleZoom(zoomedSlot.id)}
+                onFork={handleForkFromSession}
               />
             ) : (
               <PreLaunchCard
@@ -1033,6 +1085,20 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
                 onRemove={() => removeSlot(zoomedSlot.id)}
                 isZoomed={true}
                 onToggleZoom={() => handleToggleZoom(zoomedSlot.id)}
+                onForkSelect={(sessionId, display) => {
+                  setSlots(prev => prev.map(s =>
+                    s.id === zoomedSlot.id
+                      ? { ...s, forkSourceSessionId: sessionId, forkSourceDisplay: display }
+                      : s
+                  ));
+                }}
+                onForkClear={() => {
+                  setSlots(prev => prev.map(s =>
+                    s.id === zoomedSlot.id
+                      ? { ...s, forkSourceSessionId: undefined, forkSourceDisplay: undefined }
+                      : s
+                  ));
+                }}
               />
             )}
           </div>
@@ -1055,6 +1121,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
             terminalCount={slots.length}
             isZoomed={false}
             onToggleZoom={() => handleToggleZoom(slot.id)}
+            onFork={handleForkFromSession}
           />
         ) : (
           <PreLaunchCard
@@ -1085,8 +1152,31 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
             onRemove={() => removeSlot(slot.id)}
             isZoomed={false}
             onToggleZoom={() => handleToggleZoom(slot.id)}
+            onForkSelect={(sessionId, display) => {
+              setSlots(prev => prev.map(s =>
+                s.id === slot.id
+                  ? { ...s, forkSourceSessionId: sessionId, forkSourceDisplay: display }
+                  : s
+              ));
+            }}
+            onForkClear={() => {
+              setSlots(prev => prev.map(s =>
+                s.id === slot.id
+                  ? { ...s, forkSourceSessionId: undefined, forkSourceDisplay: undefined }
+                  : s
+              ));
+            }}
           />
         )
+      )}
+
+      {/* Fork Session Picker (triggered from running session header) */}
+      {forkPickerSourceSessionId !== null && projectPath && (
+        <ForkSessionPicker
+          projectPath={projectPath}
+          onSelect={handleForkSessionSelected}
+          onClose={() => setForkPickerSourceSessionId(null)}
+        />
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
@@ -15,11 +15,6 @@ pub struct GitHubOutput {
 }
 
 impl GitHubOutput {
-    /// Splits stdout into non-empty lines, filtering out blank lines.
-    pub fn lines(&self) -> Vec<&str> {
-        self.stdout.lines().filter(|l| !l.is_empty()).collect()
-    }
-
     /// Returns stdout with leading/trailing whitespace removed.
     pub fn trimmed(&self) -> &str {
         self.stdout.trim()
@@ -42,11 +37,6 @@ impl GitHub {
         Self {
             repo_path: repo_path.into(),
         }
-    }
-
-    /// Returns the repository path.
-    pub fn repo_path(&self) -> &Path {
-        &self.repo_path
     }
 
     /// Executes a gh subcommand and returns its captured output.
@@ -137,24 +127,6 @@ mod tests {
     use super::*;
 
     // GitHubOutput utility tests
-
-    #[test]
-    fn test_github_output_lines() {
-        let output = GitHubOutput {
-            stdout: "line1\nline2\n\nline3\n".to_string(),
-            stderr: String::new(),
-        };
-        assert_eq!(output.lines(), vec!["line1", "line2", "line3"]);
-    }
-
-    #[test]
-    fn test_github_output_lines_empty() {
-        let output = GitHubOutput {
-            stdout: String::new(),
-            stderr: String::new(),
-        };
-        assert!(output.lines().is_empty());
-    }
 
     #[test]
     fn test_github_output_trimmed() {

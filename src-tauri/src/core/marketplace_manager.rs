@@ -65,16 +65,6 @@ impl MarketplaceManager {
         BaseDirs::new().map(|dirs| dirs.home_dir().join(".claude").join("plugins"))
     }
 
-    /// Gets the marketplaces cache directory (~/.claude/plugins/marketplaces/).
-    fn get_marketplaces_cache_dir() -> Option<PathBuf> {
-        Self::get_user_plugins_dir().map(|p| p.join("marketplaces"))
-    }
-
-    /// Gets the repos cache directory (~/.claude/plugins/repos/).
-    fn get_repos_cache_dir() -> Option<PathBuf> {
-        Self::get_user_plugins_dir().map(|p| p.join("repos"))
-    }
-
     /// Generates a unique ID for a new marketplace source.
     fn generate_source_id() -> String {
         // Simple UUID v4-like generation using random bytes
@@ -704,15 +694,6 @@ impl MarketplaceManager {
         Ok(())
     }
 
-    /// Exports marketplace data to a JSON string.
-    pub fn export_to_json(&self) -> MarketplaceResult<String> {
-        let data = MarketplaceData {
-            sources: self.sources.read().unwrap().clone(),
-            installed_plugins: self.installed_plugins.read().unwrap().clone(),
-        };
-
-        Ok(serde_json::to_string_pretty(&data)?)
-    }
 }
 
 impl Default for MarketplaceManager {

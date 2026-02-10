@@ -1,9 +1,8 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::git::{Git, GitError, WorktreeInfo};
+use crate::git::{Git, GitError};
 
 fn worktree_base_dir() -> PathBuf {
     directories::ProjectDirs::from("com", "maestro", "maestro")
@@ -142,79 +141,6 @@ impl WorktreeManager {
         Ok(())
     }
 
-    /// Lists only worktrees that live under Maestro's managed base directory,
-    /// filtering out the main worktree and any manually created worktrees.
-    pub async fn list_managed(&self, repo_path: &Path) -> Result<Vec<WorktreeInfo>, GitError> {
-        let git = Git::new(repo_path);
-        let all = git.worktree_list().await?;
-
-        let base = worktree_base_dir();
-
-        Ok(all
-            .into_iter()
-            .filter(|wt| Path::new(&wt.path).starts_with(&base))
-            .collect())
-    }
-
-    /// Prunes stale git worktree refs and removes orphaned directories.
-    ///
-    /// First runs `git worktree prune`, then scans the managed directory for
-    /// subdirectories that are no longer in git's worktree list. Orphaned
-    /// directories are deleted with `remove_dir_all`. No-ops gracefully if
-    /// the managed directory does not exist yet.
-    pub async fn prune(&self, repo_path: &Path) -> Result<(), GitError> {
-        let git = Git::new(repo_path);
-        git.worktree_prune().await?;
-
-        // Scan managed directory for orphans not in git worktree list
-        let hash = repo_hash(repo_path).await;
-        let managed_dir = worktree_base_dir().join(&hash);
-
-        let managed_exists = tokio::fs::try_exists(&managed_dir)
-            .await
-            .map_err(|e| GitError::SpawnError {
-                source: e,
-                command: format!("try_exists {:?}", managed_dir),
-            })?;
-        if !managed_exists {
-            return Ok(());
-        }
-
-        let active_raw: Vec<String> = git
-            .worktree_list()
-            .await?
-            .iter()
-            .map(|wt| wt.path.clone())
-            .collect();
-
-        // Canonicalize active paths for reliable comparison; fall back to raw path
-        let mut active: HashSet<String> = HashSet::with_capacity(active_raw.len());
-        for raw in &active_raw {
-            let p = Path::new(raw);
-            let canonical = tokio::fs::canonicalize(p).await.unwrap_or_else(|_| p.to_path_buf());
-            active.insert(canonical.to_string_lossy().to_string());
-        }
-
-        if let Ok(mut entries) = tokio::fs::read_dir(&managed_dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let path = entry.path();
-                let canonical_entry = tokio::fs::canonicalize(&path)
-                    .await
-                    .unwrap_or_else(|_| path.clone());
-                let entry_key = canonical_entry.to_string_lossy().to_string();
-                let is_dir = tokio::fs::metadata(&path)
-                    .await
-                    .map(|m| m.is_dir())
-                    .unwrap_or(false);
-                if !active.contains(&entry_key) && is_dir {
-                    log::info!("Removing orphaned worktree dir: {}", path.display());
-                    let _ = tokio::fs::remove_dir_all(&path).await;
-                }
-            }
-        }
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -351,35 +277,6 @@ mod tests {
         wm.remove(&path, &wt_path).await.unwrap();
         // Worktree directory should be gone
         assert!(!wt_path.exists());
-    }
-
-    #[tokio::test]
-    async fn test_list_managed_excludes_main() {
-        let (_dir, path) = create_test_repo().await;
-        let git = Git::new(&path);
-        git.run(&["branch", "managed-test"]).await.unwrap();
-
-        let wm = WorktreeManager::new();
-        let wt_path = wm.create("managed-test", &path).await.unwrap();
-
-        let managed = wm.list_managed(&path).await.unwrap();
-        // Should contain only the managed worktree, not the main repo
-        assert!(managed.len() >= 1);
-        for wt in &managed {
-            assert!(!wt.is_main_worktree);
-        }
-
-        // Cleanup
-        let _ = wm.remove(&path, &wt_path).await;
-    }
-
-    #[tokio::test]
-    async fn test_list_managed_empty_for_fresh_repo() {
-        let (_dir, path) = create_test_repo().await;
-        let wm = WorktreeManager::new();
-
-        let managed = wm.list_managed(&path).await.unwrap();
-        assert!(managed.is_empty());
     }
 
     #[tokio::test]

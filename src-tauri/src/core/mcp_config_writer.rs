@@ -12,7 +12,7 @@ use dashmap::DashMap;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
-use super::mcp_manager::{McpServerConfig, McpServerSource, McpServerType};
+use super::mcp_manager::{McpServerConfig, McpServerType};
 use crate::commands::mcp::McpCustomServer;
 
 /// Per-directory lock map to serialize concurrent .mcp.json read-modify-write operations.
