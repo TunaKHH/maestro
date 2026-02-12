@@ -145,7 +145,10 @@ export const TerminalView = memo(function TerminalView({
   const fontSize = useTerminalSettingsStore((s) => s.settings.fontSize);
   const fontFamily = useTerminalSettingsStore((s) => s.settings.fontFamily);
   const lineHeight = useTerminalSettingsStore((s) => s.settings.lineHeight);
+  const zoomLevel = useTerminalSettingsStore((s) => s.settings.zoomLevel);
   const getEffectiveFontFamily = useTerminalSettingsStore((s) => s.getEffectiveFontFamily);
+  const getEffectiveFontSize = useTerminalSettingsStore((s) => s.getEffectiveFontSize);
+  const setZoomLevel = useTerminalSettingsStore((s) => s.setZoomLevel);
 
   // Get MCP count for this session (primitive values are stable, no reference issues)
   const mcpCount = useMcpStore((s) => {
@@ -206,7 +209,7 @@ export const TerminalView = memo(function TerminalView({
       const effectiveFont = getEffectiveFontFamily();
       const builtFontFamily = buildFontFamily(effectiveFont);
 
-      termRef.current.options.fontSize = fontSize;
+      termRef.current.options.fontSize = getEffectiveFontSize();
       termRef.current.options.fontFamily = builtFontFamily;
       termRef.current.options.lineHeight = lineHeight;
 
@@ -219,7 +222,7 @@ export const TerminalView = memo(function TerminalView({
         }
       });
     }
-  }, [fontSize, fontFamily, lineHeight, getEffectiveFontFamily]);
+  }, [fontSize, fontFamily, lineHeight, zoomLevel, getEffectiveFontFamily, getEffectiveFontSize]);
 
   /**
    * Immediately removes the terminal from UI (optimistic update),
@@ -312,7 +315,7 @@ export const TerminalView = memo(function TerminalView({
       const isLinux = navigator.userAgent.toLowerCase().includes("linux");
       term = new Terminal({
         cursorBlink: true,
-        fontSize: currentSettings.settings.fontSize,
+        fontSize: currentSettings.getEffectiveFontSize(),
         fontFamily: fontFamily,
         lineHeight: currentSettings.settings.lineHeight,
         theme: toXtermTheme(initialTheme),
@@ -393,10 +396,16 @@ export const TerminalView = memo(function TerminalView({
 
       // Handle special keyboard shortcuts
       term.attachCustomKeyEventHandler((event) => {
-        // Shift+Enter: insert literal newline without submitting
-        if (event.key === "Enter" && event.shiftKey && event.type === "keydown") {
-          writeStdin(sessionId, "\n").catch(console.error);
-          return false; // Don't let xterm process it
+        // Shift+Enter: send Kitty keyboard protocol sequence for Shift+Enter
+        // so Claude Code inserts a newline in its input buffer instead of executing.
+        // Raw "\n" would be treated as a command terminator by the CLI.
+        // Block all event types (keydown, keypress, keyup) to prevent xterm.js
+        // from also sending "\r" on the keypress event.
+        if (event.key === "Enter" && event.shiftKey) {
+          if (event.type === "keydown") {
+            writeStdin(sessionId, "\x1b[13;2u").catch(console.error);
+          }
+          return false;
         }
 
         // Cmd+C (Mac) or Ctrl+C (Linux/Windows): copy selection to clipboard
@@ -525,6 +534,8 @@ export const TerminalView = memo(function TerminalView({
         terminalCount={terminalCount}
         isZoomed={isZoomed}
         onToggleZoom={onToggleZoom}
+        zoomLevel={zoomLevel}
+        onSetZoomLevel={setZoomLevel}
         onFork={onFork}
         showFork={effectiveProvider === "claude"}
       />
