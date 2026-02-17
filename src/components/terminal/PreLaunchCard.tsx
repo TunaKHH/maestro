@@ -92,6 +92,8 @@ interface PreLaunchCardProps {
   onForkSelect?: (sessionId: string, display: string) => void;
   /** Callback to clear the fork source selection. */
   onForkClear?: () => void;
+  /** Callback to open a plain terminal (no AI CLI). */
+  onOpenTerminal?: () => void;
 }
 
 const AI_MODES: { mode: AiMode; icon: typeof BrainCircuit; label: string; color: string }[] = [
@@ -147,6 +149,7 @@ export function PreLaunchCard({
   onToggleZoom,
   onForkSelect,
   onForkClear,
+  onOpenTerminal,
 }: PreLaunchCardProps) {
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false);
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
@@ -1438,6 +1441,18 @@ export function PreLaunchCard({
           >
             <GitFork size={14} />
             Fork from Session
+          </button>
+        )}
+
+        {/* Open Terminal Button (always visible) */}
+        {onOpenTerminal && (
+          <button
+            type="button"
+            onClick={onOpenTerminal}
+            className="flex items-center justify-center gap-2 rounded border border-maestro-border px-4 py-2 text-xs text-maestro-muted transition-colors hover:border-maestro-accent/50 hover:text-maestro-text"
+          >
+            <Terminal size={14} />
+            Open Terminal
           </button>
         )}
 

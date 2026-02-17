@@ -1049,6 +1049,19 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     setForkPickerSourceSessionId(null);
   }, [forkPickerSourceSessionId, mcpServers, skills, plugins]);
 
+  /**
+   * Opens a plain terminal (no AI CLI) by switching the slot mode to Plain and launching.
+   */
+  const handleOpenTerminal = useCallback((slotId: string) => {
+    setSlots((prev) =>
+      prev.map((s) => (s.id === slotId ? { ...s, mode: "Plain" as AiMode } : s))
+    );
+    // Use setTimeout to ensure state update is applied before launching
+    setTimeout(() => {
+      launchSlot(slotId);
+    }, 0);
+  }, [launchSlot]);
+
   // Handle Escape key to exit zoom mode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1197,6 +1210,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
                       : s
                   ));
                 }}
+                onOpenTerminal={() => handleOpenTerminal(zoomedSlot.id)}
               />
             )}
           </div>
@@ -1270,10 +1284,11 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
               : s
           ));
         }}
+        onOpenTerminal={() => handleOpenTerminal(slot.id)}
       />
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps -- Deps cover all render-affecting state
-  }, [slots, focusedSlotId, isActive, getFocusCallback, handleKill, handleToggleZoom, handleForkFromSession, projectPath, branches, isLoadingBranches, isGitRepo, repositories, workspaceType, effectiveRepoPath, onRepoChange, mcpServers, skills, plugins, handleCreateBranch, updateSlotMode, updateSlotBranch, toggleSlotMcp, toggleSlotSkill, toggleSlotPlugin, selectAllMcp, unselectAllMcp, selectAllPlugins, unselectAllPlugins, launchSlot, removeSlot]);
+  }, [slots, focusedSlotId, isActive, getFocusCallback, handleKill, handleToggleZoom, handleForkFromSession, projectPath, branches, isLoadingBranches, isGitRepo, repositories, workspaceType, effectiveRepoPath, onRepoChange, mcpServers, skills, plugins, handleCreateBranch, updateSlotMode, updateSlotBranch, toggleSlotMcp, toggleSlotSkill, toggleSlotPlugin, selectAllMcp, unselectAllMcp, selectAllPlugins, unselectAllPlugins, launchSlot, removeSlot, handleOpenTerminal]);
 
   const handleRatioChange = useCallback((nodeId: string, ratio: number) => {
     setLayoutTree((prev) => updateRatio(prev, nodeId, ratio));
