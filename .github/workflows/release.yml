@@ -89,7 +89,11 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Build MCP server (needed by Tauri build script)
-        run: cargo build --release -p maestro-mcp-server
+        run: |
+          cargo build --release -p maestro-mcp-server
+          mkdir -p src-tauri/binaries
+          cp target/release/maestro-mcp-server \
+            src-tauri/binaries/maestro-mcp-server-x86_64-unknown-linux-gnu
 
       - name: Run Rust tests
         run: cargo test --workspace
@@ -196,15 +200,27 @@ jobs:
       - name: Build MCP server
         shell: bash
         run: |
+          mkdir -p src-tauri/binaries
           if [ "${{ matrix.platform }}" = "macos-latest" ]; then
             cargo build --release -p maestro-mcp-server --target aarch64-apple-darwin
             cargo build --release -p maestro-mcp-server --target x86_64-apple-darwin
-            mkdir -p target/release
-            lipo -create -output target/release/maestro-mcp-server \
+            # Universal binary for macOS
+            lipo -create -output src-tauri/binaries/maestro-mcp-server-universal-apple-darwin \
               target/aarch64-apple-darwin/release/maestro-mcp-server \
               target/x86_64-apple-darwin/release/maestro-mcp-server
+            # Per-arch copies needed by Tauri's externalBin validation during universal build
+            cp target/aarch64-apple-darwin/release/maestro-mcp-server \
+              src-tauri/binaries/maestro-mcp-server-aarch64-apple-darwin
+            cp target/x86_64-apple-darwin/release/maestro-mcp-server \
+              src-tauri/binaries/maestro-mcp-server-x86_64-apple-darwin
+          elif [ "${{ matrix.platform }}" = "windows-latest" ]; then
+            cargo build --release -p maestro-mcp-server
+            cp target/release/maestro-mcp-server.exe \
+              src-tauri/binaries/maestro-mcp-server-x86_64-pc-windows-msvc.exe
           else
             cargo build --release -p maestro-mcp-server
+            cp target/release/maestro-mcp-server \
+              src-tauri/binaries/maestro-mcp-server-x86_64-unknown-linux-gnu
           fi
 
       - name: Build Tauri app
@@ -222,16 +238,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          # Unset password if empty — empty string != no password for minisign
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
-            unset TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-          fi
-
           if [ "${{ matrix.platform }}" = "macos-latest" ]; then
             BUNDLE_DIR="target/universal-apple-darwin/release/bundle"
             # .app.tar.gz already created by tauri-action
             echo "Signing macOS updater bundle..."
-            npx tauri signer sign "$BUNDLE_DIR/macos/Maestro.app.tar.gz"
+            npx tauri signer sign -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$BUNDLE_DIR/macos/Maestro.app.tar.gz"
             ls -la "$BUNDLE_DIR/macos/"
           fi
 
@@ -243,7 +254,7 @@ jobs:
             # Use PowerShell for zip on Windows
             powershell -Command "Compress-Archive -Path '$EXE_FILE' -DestinationPath '$ZIP_FILE'"
             echo "Signing Windows updater bundle..."
-            npx tauri signer sign "$ZIP_FILE"
+            npx tauri signer sign -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$ZIP_FILE"
             ls -la "$BUNDLE_DIR/nsis/"
           fi
 
@@ -255,7 +266,7 @@ jobs:
             echo "Creating Linux updater archive: $(basename $TGZ_FILE)"
             tar czf "$TGZ_FILE" -C "$(dirname $APPIMAGE_FILE)" "$APPIMAGE_NAME"
             echo "Signing Linux updater bundle..."
-            npx tauri signer sign "$TGZ_FILE"
+            npx tauri signer sign -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$TGZ_FILE"
             ls -la "$BUNDLE_DIR/appimage/"
           fi
 
@@ -431,7 +442,11 @@ jobs:
               notes: notes,
               pub_date: new Date().toISOString(),
               platforms: {
-                'darwin-universal': {
+                'darwin-aarch64': {
+                  signature: macSig,
+                  url: `${baseUrl}/${macBundle.name}`,
+                },
+                'darwin-x86_64': {
                   signature: macSig,
                   url: `${baseUrl}/${macBundle.name}`,
                 },

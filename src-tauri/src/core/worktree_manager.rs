@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::git::{Git, GitError};
+use crate::git::{Git, GitError, WorktreeInfo};
 
-fn worktree_base_dir() -> PathBuf {
+pub(crate) fn worktree_base_dir() -> PathBuf {
     directories::ProjectDirs::from("com", "maestro", "maestro")
         .map(|p| p.data_dir().to_path_buf())
         .unwrap_or_else(|| {
@@ -52,6 +53,14 @@ fn sanitize_branch(branch: &str) -> String {
     sanitized
 }
 
+/// Returns the override path if provided, otherwise falls back to the default
+/// XDG-based worktree base directory.
+fn effective_base_dir(base_override: Option<&Path>) -> PathBuf {
+    base_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(worktree_base_dir)
+}
+
 /// Manages Maestro-owned git worktrees under a deterministic, repo-specific
 /// directory inside XDG data dirs.
 ///
@@ -75,9 +84,19 @@ impl WorktreeManager {
 
     /// Compute the worktree path for a given repo + branch.
     pub(crate) async fn worktree_path(&self, repo_path: &Path, branch: &str) -> PathBuf {
+        self.worktree_path_with_base(repo_path, branch, None).await
+    }
+
+    /// Compute the worktree path with an optional base directory override.
+    pub(crate) async fn worktree_path_with_base(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        base_override: Option<&Path>,
+    ) -> PathBuf {
         let hash = repo_hash(repo_path).await;
         let sanitized = sanitize_branch(branch);
-        worktree_base_dir().join(hash).join(sanitized)
+        effective_base_dir(base_override).join(hash).join(sanitized)
     }
 
     /// Creates a worktree for the given branch, returning its path on disk.
@@ -90,6 +109,16 @@ impl WorktreeManager {
         &self,
         branch: &str,
         repo_path: &Path,
+    ) -> Result<PathBuf, GitError> {
+        self.create_with_base(branch, repo_path, None).await
+    }
+
+    /// Creates a worktree with an optional base directory override.
+    pub async fn create_with_base(
+        &self,
+        branch: &str,
+        repo_path: &Path,
+        base_override: Option<&Path>,
     ) -> Result<PathBuf, GitError> {
         let git = Git::new(repo_path);
 
@@ -111,7 +140,7 @@ impl WorktreeManager {
             }
         }
 
-        let wt_path = self.worktree_path(repo_path, branch).await;
+        let wt_path = self.worktree_path_with_base(repo_path, branch, base_override).await;
 
         // Create parent directories
         if let Some(parent) = wt_path.parent() {
@@ -141,6 +170,88 @@ impl WorktreeManager {
         Ok(())
     }
 
+    /// Lists only worktrees that live under Maestro's managed base directory,
+    /// filtering out the main worktree and any manually created worktrees.
+    pub async fn list_managed(&self, repo_path: &Path) -> Result<Vec<WorktreeInfo>, GitError> {
+        self.list_managed_with_base(repo_path, None).await
+    }
+
+    /// Lists managed worktrees with an optional base directory override.
+    pub async fn list_managed_with_base(
+        &self,
+        repo_path: &Path,
+        base_override: Option<&Path>,
+    ) -> Result<Vec<WorktreeInfo>, GitError> {
+        let git = Git::new(repo_path);
+        let all = git.worktree_list().await?;
+
+        let base = effective_base_dir(base_override);
+
+        Ok(all
+            .into_iter()
+            .filter(|wt| Path::new(&wt.path).starts_with(&base))
+            .collect())
+    }
+
+    /// Prunes stale git worktree refs and removes orphaned directories.
+    ///
+    /// First runs `git worktree prune`, then scans the managed directory for
+    /// subdirectories that are no longer in git's worktree list. Orphaned
+    /// directories are deleted with `remove_dir_all`. No-ops gracefully if
+    /// the managed directory does not exist yet.
+    pub async fn prune(&self, repo_path: &Path) -> Result<(), GitError> {
+        let git = Git::new(repo_path);
+        git.worktree_prune().await?;
+
+        // Scan managed directory for orphans not in git worktree list
+        let hash = repo_hash(repo_path).await;
+        let managed_dir = worktree_base_dir().join(&hash);
+
+        let managed_exists = tokio::fs::try_exists(&managed_dir)
+            .await
+            .map_err(|e| GitError::SpawnError {
+                source: e,
+                command: format!("try_exists {:?}", managed_dir),
+            })?;
+        if !managed_exists {
+            return Ok(());
+        }
+
+        let active_raw: Vec<String> = git
+            .worktree_list()
+            .await?
+            .iter()
+            .map(|wt| wt.path.clone())
+            .collect();
+
+        // Canonicalize active paths for reliable comparison; fall back to raw path
+        let mut active: HashSet<String> = HashSet::with_capacity(active_raw.len());
+        for raw in &active_raw {
+            let p = Path::new(raw);
+            let canonical = tokio::fs::canonicalize(p).await.unwrap_or_else(|_| p.to_path_buf());
+            active.insert(canonical.to_string_lossy().to_string());
+        }
+
+        if let Ok(mut entries) = tokio::fs::read_dir(&managed_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                let canonical_entry = tokio::fs::canonicalize(&path)
+                    .await
+                    .unwrap_or_else(|_| path.clone());
+                let entry_key = canonical_entry.to_string_lossy().to_string();
+                let is_dir = tokio::fs::metadata(&path)
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false);
+                if !active.contains(&entry_key) && is_dir {
+                    log::info!("Removing orphaned worktree dir: {}", path.display());
+                    let _ = tokio::fs::remove_dir_all(&path).await;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
