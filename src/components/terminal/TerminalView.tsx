@@ -8,6 +8,7 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 
 import { QuickActionsManager } from "@/components/quickactions/QuickActionsManager";
+import { ActivityFeed } from "@/components/session/ActivityFeed";
 import { isGitWorktree } from "@/lib/git";
 import { useSessionBranch } from "@/hooks/useSessionBranch";
 import { buildFontFamily, waitForFont } from "@/lib/fonts";
@@ -49,6 +50,7 @@ function mapAiMode(mode: AiMode): AIProvider {
     Claude: "claude",
     Gemini: "gemini",
     Codex: "codex",
+    OpenCode: "opencode",
     Plain: "plain",
   };
   const provider = map[mode];
@@ -178,6 +180,7 @@ export const TerminalView = memo(function TerminalView({
 
   // Quick actions manager modal state
   const [showQuickActionsManager, setShowQuickActionsManager] = useState(false);
+  const [activeTab, setActiveTab] = useState<"terminal" | "activity">("terminal");
   const handleManageClick = useCallback(() => setShowQuickActionsManager(true), []);
 
   // Backend capabilities (for future enhanced features like terminal state queries)
@@ -283,6 +286,17 @@ export const TerminalView = memo(function TerminalView({
     let writeBuffer: string[] = [];
     let rafId: number | null = null;
     let fallbackTimerId: ReturnType<typeof setTimeout> | null = null;
+
+    // === Activity-based status detection ===
+    let activityWorkingTimer: ReturnType<typeof setTimeout> | null = null;
+    let activityIdleTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastHeuristicStatus: string | null = null;
+
+    const MCP_GRACE_PERIOD_MS = 10_000; // Defer to MCP for 10s after last MCP update
+    const WORKING_DEBOUNCE_MS = 500;    // Sustained output before marking "Working"
+    const IDLE_TIMEOUT_MS = 5_000;      // No output before marking "Idle"
+    // Only overwrite "safe" states — never revert terminal states like Done/Error/NeedsInput/Timeout
+    const SAFE_TO_OVERRIDE: BackendSessionStatus[] = ["Working", "Idle", "Starting"];
 
     const MAX_BUFFER_CHUNKS = 100;  // Force flush at ~400KB (100 × 4KB chunks)
     const FALLBACK_FLUSH_MS = 50;   // 20fps floor for backgrounded tabs
@@ -485,6 +499,44 @@ export const TerminalView = memo(function TerminalView({
         } else {
           scheduleFlush();
         }
+
+        // --- Activity-based status detection ---
+        const session = useSessionStore.getState().sessions.find(s => s.id === sessionId);
+        if (!session) return; // Session was removed, skip heuristic
+
+        const lastMcp = session.lastMcpUpdateTime ?? 0;
+        const mcpIsActive = (Date.now() - lastMcp) < MCP_GRACE_PERIOD_MS;
+
+        if (!mcpIsActive) {
+          // Debounce: set "Working" after sustained output
+          if (!activityWorkingTimer && lastHeuristicStatus !== "Working") {
+            activityWorkingTimer = setTimeout(() => {
+              if (disposed) return;
+              activityWorkingTimer = null;
+              const current = useSessionStore.getState().sessions.find(s => s.id === sessionId);
+              if (!current || !SAFE_TO_OVERRIDE.includes(current.status)) return;
+              lastHeuristicStatus = "Working";
+              useSessionStore.getState().updateSession(sessionId, {
+                status: "Working" as BackendSessionStatus,
+              });
+            }, WORKING_DEBOUNCE_MS);
+          }
+
+          // Reset idle timer on every output chunk
+          if (activityIdleTimer) clearTimeout(activityIdleTimer);
+          activityIdleTimer = setTimeout(() => {
+            if (disposed) return;
+            activityIdleTimer = null;
+            if (lastHeuristicStatus === "Working") {
+              const current = useSessionStore.getState().sessions.find(s => s.id === sessionId);
+              if (!current || !SAFE_TO_OVERRIDE.includes(current.status)) return;
+              lastHeuristicStatus = "Idle";
+              useSessionStore.getState().updateSession(sessionId, {
+                status: "Idle" as BackendSessionStatus,
+              });
+            }
+          }, IDLE_TIMEOUT_MS);
+        }
       });
       listenerReady
         .then((fn) => {
@@ -526,6 +578,8 @@ export const TerminalView = memo(function TerminalView({
     return () => {
       disposed = true;
       cancelPendingFlush();
+      if (activityWorkingTimer) clearTimeout(activityWorkingTimer);
+      if (activityIdleTimer) clearTimeout(activityIdleTimer);
       // Flush remaining buffered output before disposal
       if (term && writeBuffer.length > 0) {
         try { term.write(writeBuffer.join('')); } catch { /* ignore errors during cleanup */ }
@@ -573,14 +627,49 @@ export const TerminalView = memo(function TerminalView({
         showFork={effectiveProvider === "claude"}
       />
 
-      {/* xterm.js container */}
-      <div ref={containerRef} className="flex-1 overflow-hidden" />
+      {/* Tab bar */}
+      <div className="flex shrink-0 items-center gap-0.5 border-b border-neutral-800 bg-neutral-900/50 px-2">
+        <button
+          type="button"
+          className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
+            activeTab === "terminal"
+              ? "border-b-2 border-blue-500 text-neutral-200"
+              : "text-neutral-500 hover:text-neutral-300"
+          }`}
+          onClick={() => setActiveTab("terminal")}
+        >
+          Terminal
+        </button>
+        <button
+          type="button"
+          className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
+            activeTab === "activity"
+              ? "border-b-2 border-blue-500 text-neutral-200"
+              : "text-neutral-500 hover:text-neutral-300"
+          }`}
+          onClick={() => setActiveTab("activity")}
+        >
+          Activity
+        </button>
+      </div>
 
-      {/* Quick action pills */}
-      <QuickActionPills
-        onAction={handleQuickAction}
-        onManageClick={handleManageClick}
-      />
+      {/* xterm.js container - always mounted but hidden when activity tab is active */}
+      <div ref={containerRef} className={`flex-1 overflow-hidden ${activeTab !== "terminal" ? "hidden" : ""}`} />
+
+      {/* Activity feed - shown when activity tab is active */}
+      {activeTab === "activity" && (
+        <div className="flex-1 overflow-hidden">
+          <ActivityFeed sessionId={sessionId} maxHeight="100%" />
+        </div>
+      )}
+
+      {/* Quick action pills - only show on terminal tab */}
+      {activeTab === "terminal" && (
+        <QuickActionPills
+          onAction={handleQuickAction}
+          onManageClick={handleManageClick}
+        />
+      )}
 
       {/* Quick actions manager modal */}
       {showQuickActionsManager && (

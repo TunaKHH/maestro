@@ -37,7 +37,7 @@ export async function killSession(sessionId: number): Promise<void> {
 }
 
 /** AI mode variants matching the backend enum. */
-export type AiMode = "Claude" | "Gemini" | "Codex" | "Plain";
+export type AiMode = "Claude" | "Gemini" | "Codex" | "OpenCode" | "Plain";
 
 /** CLI modes that support flags (excludes Plain). */
 export type CliAiMode = Exclude<AiMode, "Plain">;
@@ -63,12 +63,35 @@ export const AI_CLI_CONFIG: Record<AiMode, {
     installHint: "npm install -g codex",
     skipPermissionsFlag: "--dangerously-bypass-approvals-and-sandbox",
   },
+  OpenCode: {
+    command: "opencode",
+    installHint: "npm install -g opencode-ai",
+    skipPermissionsFlag: "--dangerously-skip-permissions",
+  },
   Plain: {
     command: null,
     installHint: "",
     skipPermissionsFlag: null,
   },
 };
+
+/** Writes hooks configuration for a Claude session to .claude/settings.local.json. */
+export async function writeSessionHooksConfig(
+  workingDir: string,
+  sessionId: number
+): Promise<void> {
+  await invoke("write_session_hooks_config", {
+    workingDir,
+    sessionId,
+  });
+}
+
+/** Removes hooks configuration from .claude/settings.local.json. */
+export async function removeSessionHooksConfig(
+  workingDir: string
+): Promise<void> {
+  await invoke("remove_session_hooks_config", { workingDir });
+}
 
 /** Checks if a CLI tool is available in the user's PATH */
 export async function checkCliAvailable(command: string): Promise<boolean> {

@@ -1,9 +1,10 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 
 import { getBranchesWithWorktreeStatus, type BranchWithWorktreeStatus } from "@/lib/git";
-import { removeSessionMcpConfig, setSessionMcpServers, writeSessionMcpConfig, type McpServerConfig } from "@/lib/mcp";
+import { removeSessionMcpConfig, removeOpenCodeMcpConfig, setSessionMcpServers, writeSessionMcpConfig, writeOpenCodeMcpConfig, type McpServerConfig } from "@/lib/mcp";
 import {
   loadBranchConfig,
   removeSessionPluginConfig,
@@ -21,12 +22,16 @@ import {
   checkCliAvailable,
   createSession,
   killSession,
+  removeSessionHooksConfig,
   spawnShell,
   waitForTerminalReady,
+  writeSessionHooksConfig,
   writeStdin,
   type CliFlags,
 } from "@/lib/terminal";
 import type { ClaudeSession } from "@/lib/claudeSessions";
+import { checkFullDiskAccess, pathRequiresFDA } from "@/lib/permissions";
+import { useFDAStore } from "@/stores/useFDAStore";
 import { useCliSettingsStore } from "@/stores/useCliSettingsStore";
 import { cleanupSessionWorktree, prepareSessionWorktree } from "@/lib/worktreeManager";
 import { useTerminalKeyboard } from "@/hooks/useTerminalKeyboard";
@@ -211,6 +216,9 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   const mounted = useRef(false);
   // Track debounce timers for saving branch config (keyed by slot ID)
   const branchConfigSaveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Ref to access latest onAllSessionsClosed without adding it to callback deps
+  const onAllSessionsClosedRef = useRef(onAllSessionsClosed);
+  onAllSessionsClosedRef.current = onAllSessionsClosed;
 
   // Stable per-slot focus callbacks — avoids creating new arrow functions on every render,
   // which would defeat React.memo on TerminalView.
@@ -612,6 +620,40 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
                 console.error("Failed to write plugin config:", err);
                 // Non-fatal - continue with CLI launch
               }
+
+              // Write hooks config for Claude sessions
+              // This configures Claude Code to POST hook events back to Maestro's status server
+              try {
+                await writeSessionHooksConfig(workingDirectory, sessionId);
+              } catch (err) {
+                console.warn("Failed to write hooks config:", err);
+                // Non-fatal: hooks are enhancement, session can work without them
+              }
+            } else if (workingDirectory && slot.mode === "OpenCode") {
+              // Write OpenCode MCP config (opencode.json format)
+              try {
+                await writeOpenCodeMcpConfig(
+                  workingDirectory,
+                  sessionId,
+                  projectPath ?? workingDirectory,
+                  slot.enabledMcpServers
+                );
+              } catch (err) {
+                console.error("Failed to write OpenCode MCP config:", err);
+                // Non-fatal - continue with CLI launch
+              }
+
+              // Write plugin enabled/disabled state to settings.local.json
+              try {
+                await writeSessionPluginConfig(
+                  workingDirectory,
+                  projectPath ?? workingDirectory,
+                  slot.enabledPlugins
+                );
+              } catch (err) {
+                console.error("Failed to write plugin config:", err);
+                // Non-fatal - continue with CLI launch
+              }
             }
 
             // Wait for xterm.js to mount and start listening for PTY output
@@ -667,6 +709,16 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     const slot = slotsRef.current.find((s) => s.id === slotId);
     if (!slot || slot.sessionId !== null) return;
 
+    // Gate on FDA: if the project is in a TCC-protected directory, check
+    // Full Disk Access before any Rust-side filesystem operations.
+    if (projectPath && pathRequiresFDA(projectPath)) {
+      const hasAccess = await checkFullDiskAccess();
+      if (!hasAccess) {
+        useFDAStore.getState().requireAccess(projectPath, () => launchSlot(slotId));
+        return;
+      }
+    }
+
     // Serialize launches within the same project to prevent .mcp.json race conditions
     const lockPath = projectPath ?? "no-project";
     await withProjectLock(lockPath, async () => {
@@ -695,24 +747,33 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     const worktreePath = slot?.worktreePath;
     const workingDir = worktreePath || projectPath;
 
-    // Clean up cached focus callback for this slot
-    if (slot) {
-      focusCallbacksRef.current.delete(slot.id);
+    // If this is the last slot, return to idle landing view immediately
+    if (slotsRef.current.length <= 1 && onAllSessionsClosedRef.current) {
+      // Clean up focus callback
+      if (slot) {
+        focusCallbacksRef.current.delete(slot.id);
+      }
+      onAllSessionsClosedRef.current();
+    } else {
+      // Clean up cached focus callback for this slot
+      if (slot) {
+        focusCallbacksRef.current.delete(slot.id);
 
-      // If the closed pane was focused, focus its sibling
-      if (focusedSlotId === slot.id) {
-        const sibling = findSiblingSlotId(layoutTree, slot.id);
-        setFocusedSlotId(sibling);
+        // If the closed pane was focused, focus its sibling
+        if (focusedSlotId === slot.id) {
+          const sibling = findSiblingSlotId(layoutTree, slot.id);
+          setFocusedSlotId(sibling);
+        }
+
+        // Remove leaf from split tree
+        setLayoutTree((prev) => {
+          const result = removeLeaf(prev, slot.id);
+          return result ?? prev;
+        });
       }
 
-      // Remove leaf from split tree
-      setLayoutTree((prev) => {
-        const result = removeLeaf(prev, slot.id);
-        return result ?? prev; // shouldn't be null since we respawn below
-      });
+      setSlots((prev) => prev.filter((s) => s.sessionId !== sessionId));
     }
-
-    setSlots((prev) => prev.filter((s) => s.sessionId !== sessionId));
 
     // Remove session from the session store
     useSessionStore.getState().removeSession(sessionId);
@@ -724,12 +785,21 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
 
     // Clean up session-specific MCP config (fire-and-forget)
     if (workingDir) {
-      removeSessionMcpConfig(workingDir, sessionId).catch(console.error);
+      if (slot?.mode === "OpenCode") {
+        removeOpenCodeMcpConfig(workingDir, sessionId).catch(console.error);
+      } else {
+        removeSessionMcpConfig(workingDir, sessionId).catch(console.error);
+      }
     }
 
     // Clean up session-specific plugin config (fire-and-forget)
     if (workingDir) {
       removeSessionPluginConfig(workingDir).catch(console.error);
+    }
+
+    // Clean up session-specific hooks config (fire-and-forget)
+    if (workingDir && slot?.mode === "Claude") {
+      removeSessionHooksConfig(workingDir).catch(console.error);
     }
 
     // Clean up worktree if one was created (fire-and-forget)
@@ -746,6 +816,13 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
    */
   const removeSlot = useCallback((slotId: string) => {
     focusCallbacksRef.current.delete(slotId);
+
+    // If removing the last slot, return to idle landing view immediately
+    // rather than going through an intermediate empty state
+    if (slotsRef.current.length <= 1 && onAllSessionsClosedRef.current) {
+      onAllSessionsClosedRef.current();
+      return;
+    }
 
     // If the removed pane was focused, focus its sibling
     if (focusedSlotId === slotId) {
@@ -769,8 +846,18 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     if (slotsRef.current.length <= 1) return; // don't close the last pane
     const slot = slotsRef.current.find((s) => s.id === targetId);
     if (!slot) return;
+
     if (slot.sessionId !== null) {
-      handleKill(slot.sessionId);
+      // Confirm before closing a launched session (async native dialog)
+      ask("Are you sure you want to close this session?", {
+        title: "Close Session",
+        kind: "warning",
+      }).then((confirmed) => {
+        if (!confirmed) return;
+        // Kill the backend PTY process (fire-and-forget)
+        killSession(slot.sessionId!).catch(console.error);
+        handleKill(slot.sessionId!);
+      }).catch(console.error);
     } else {
       removeSlot(slot.id);
     }
