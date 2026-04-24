@@ -32,10 +32,9 @@ pub use process_manager::ProcessManager;
 pub use terminal_backend::{
     BackendCapabilities, BackendType,
 };
+pub use process_tree::SessionProcessTree;
+pub use status_server::StatusServer;
 pub use transcript_watcher::TranscriptWatcher;
-pub use worktree_manager::WorktreeManager;
-pub use xterm_backend::XtermPassthroughBackend;
-pub use process_tree::{ProcessError, ProcessInfo, SessionProcessTree};
 
 #[cfg(feature = "vte-backend")]
 pub use vte_backend::VteBackend;
